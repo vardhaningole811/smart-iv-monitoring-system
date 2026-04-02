@@ -1,0 +1,901 @@
+openapi: 3.0.3
+info:
+  title: Hexagon IoT Healthcare Monitoring API
+  version: 1.0.0
+  description: >
+    OpenAPI spec for the Hexagon backend used by the React dashboard.
+    This spec includes:
+    - Implemented endpoints in this repo (status: implemented)
+    - Frontend-referenced / PRD endpoints that are not implemented yet (status: planned)
+
+servers:
+  - url: "{apiUrl}"
+    description: Backend base URL (set to your deployment)
+    variables:
+      apiUrl:
+        default: http://localhost:4000
+
+x-websocket:
+  protocol: socket.io
+  endpoint: "{apiUrl}"
+  namespace: "/"
+  transports: [websocket, polling]
+  auth:
+    required: true
+    note: Pass JWT in Socket.IO `auth` payload so the backend can route data per user/role.
+  rooms:
+    patient: "patient:<userId>"
+    doctor: "role:doctor"
+  frontendConnectionExample: |
+    import { io } from "socket.io-client";
+    const token = localStorage.getItem("smartiv_token");
+    const socket = io(import.meta.env.VITE_API_URL, {
+      autoConnect: true,
+      transports: ["websocket", "polling"],
+      auth: { token },
+    });
+    socket.on("vitals:new", (payload) => {/* update vitals state */});
+    socket.on("alert:new", (payload) => {/* prepend alert */});
+    socket.on("insight:update", (payload) => {/* update insight panel */});
+  events:
+    subscribe:
+      - name: vitals:new
+        payloadRef: "#/components/schemas/Vitals"
+        description: Emitted when a vitals reading is created.
+      - name: alert:new
+        payloadRef: "#/components/schemas/Alert"
+        description: Emitted when a new alert is inserted.
+      - name: insight:update
+        payloadRef: "#/components/schemas/DrugCurveResult"
+        description: Emitted after drug curve recomputation for iv_start.
+    emit:
+      - name: "(none in v1)"
+        description: Frontend currently does not emit custom socket events.
+
+tags:
+  - name: Health
+  - name: Vitals
+  - name: Alerts
+  - name: Events
+  - name: Insights
+  - name: AI Vision
+  - name: Auth (planned)
+  - name: Patients (planned)
+  - name: Control (planned)
+  - name: Logs (planned)
+  - name: Settings (planned)
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    ApiEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          nullable: true
+        error:
+          type: string
+      required: [success]
+
+    HealthResponse:
+      type: object
+      properties:
+        status: { type: string, example: ok }
+        service: { type: string, example: backend }
+      required: [status, service]
+
+    Vitals:
+      type: object
+      properties:
+        _id: { type: string, example: "663a1d0c9f8e2a0012c0ab12" }
+        heartRate: { type: number, example: 82 }
+        spo2: { type: number, example: 97 }
+        ivStatus:
+          type: string
+          enum: [running, stopped]
+        patientId:
+          type: string
+          description: MongoDB User id of the owning patient
+        nodeId:
+          type: string
+          description: Optional DeviceNode id that produced this vitals record
+        timestamp:
+          type: string
+          format: date-time
+      required: [heartRate, spo2, ivStatus, patientId]
+
+    CreateVitalsRequest:
+      type: object
+      properties:
+        heartRate: { type: number, example: 82 }
+        spo2: { type: number, example: 97 }
+        ivStatus:
+          type: string
+          enum: [running, stopped]
+        patientId:
+          type: string
+          description: Required for doctors; patients are forced to their own id
+        nodeId:
+          type: string
+          description: Optional DeviceNode id
+        timestamp:
+          type: string
+          format: date-time
+          description: Optional; backend defaults to now.
+      required: [heartRate, spo2, ivStatus, patientId]
+
+    Alert:
+      type: object
+      properties:
+        _id: { type: string }
+        type: { type: string, example: LOW_SPO2_CRITICAL }
+        message: { type: string }
+        severity:
+          type: string
+          enum: [info, warning, critical]
+        acknowledged: { type: boolean, example: false }
+        hash:
+          type: string
+          description: "SHA256(alertType + timeBucket). Used for 5-min dedup."
+        patientId:
+          type: string
+          description: MongoDB User id of the owning patient
+        timestamp:
+          type: string
+          format: date-time
+      required: [type, message, severity, patientId]
+
+    CreateAlertRequest:
+      type: object
+      properties:
+        type: { type: string }
+        message: { type: string }
+        severity:
+          type: string
+          enum: [info, warning, critical]
+        acknowledged: { type: boolean, default: false }
+        hash: { type: string, nullable: true }
+        patientId:
+          type: string
+          description: Required for doctors; patients are forced to their own id
+        timestamp:
+          type: string
+          format: date-time
+      required: [type, message, severity, patientId]
+
+    Event:
+      type: object
+      properties:
+        _id: { type: string }
+        type:
+          type: string
+          enum: [iv_start, iv_stop]
+        patientId:
+          type: string
+          description: MongoDB User id of the owning patient
+        nodeId:
+          type: string
+          description: Optional DeviceNode id
+        timestamp:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          additionalProperties: true
+      required: [type, patientId]
+
+    CreateEventRequest:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [iv_start, iv_stop]
+        timestamp:
+          type: string
+          format: date-time
+          description: Optional; backend defaults to now.
+        patientId:
+          type: string
+          description: Required for doctors; patients are forced to their own id
+        nodeId:
+          type: string
+          description: Optional DeviceNode id
+        metadata:
+          type: object
+          additionalProperties: true
+      required: [type, patientId]
+
+    DeviceNode:
+      type: object
+      properties:
+        _id: { type: string }
+        nodeKey: { type: string }
+        host: { type: string }
+        patientId:
+          type: string
+          nullable: true
+          description: Assigned patient user id
+        assignedByDoctorId:
+          type: string
+          nullable: true
+          description: Doctor user id who assigned this node
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [nodeKey, host]
+
+    DrugCurveResult:
+      type: object
+      nullable: true
+      properties:
+        ivStartTime: { type: string, format: date-time }
+        patientId:
+          type: string
+          description: MongoDB User id of the owning patient
+        baseline:
+          nullable: true
+          type: object
+          properties:
+            heartRate: { type: number, nullable: true }
+            spo2: { type: number, nullable: true }
+        responseDelayMins: { type: number, nullable: true }
+        improvement:
+          nullable: true
+          type: object
+          properties:
+            heartRate: { type: number, nullable: true }
+            spo2: { type: number, nullable: true }
+        stabilizationMins: { type: number, nullable: true }
+        vitalsTimeline:
+          type: array
+          items:
+            $ref: "#/components/schemas/Vitals"
+        insight:
+          type: string
+          description: Deterministic plain-language sentence(s).
+
+    AnalyzeFrameResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: Vision status or error.
+          example: normal
+        message:
+          type: string
+          nullable: true
+      required: [status]
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Backend health check
+      x-status: implemented
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /api/vitals:
+    post:
+      tags: [Vitals]
+      summary: Ingest one vitals reading (also emits vitals:new; alerts are a side effect)
+      x-status: implemented
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVitalsRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      success: { type: boolean, example: true }
+                      data:
+                        $ref: "#/components/schemas/Vitals"
+        "400":
+          description: Validation / insert error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+
+  /api/vitals/latest:
+    get:
+      tags: [Vitals]
+      summary: Get the latest vitals reading
+      x-status: implemented
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      success: { type: boolean, example: true }
+                      data:
+                        $ref: "#/components/schemas/Vitals"
+
+  /api/vitals/history:
+    get:
+      tags: [Vitals]
+      summary: Get vitals history (newest first)
+      x-status: implemented
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
+          required: false
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      success: { type: boolean, example: true }
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Vitals"
+
+  /api/alerts:
+    get:
+      tags: [Alerts]
+      summary: List alerts (newest first)
+      x-status: implemented
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      success: { type: boolean, example: true }
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Alert"
+    post:
+      tags: [Alerts]
+      summary: Create an alert directly (manual/testing)
+      x-status: implemented
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAlertRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      success: { type: boolean, example: true }
+                      data:
+                        $ref: "#/components/schemas/Alert"
+        "400":
+          description: Insert error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+
+  /api/events:
+    post:
+      tags: [Events]
+      summary: Create an event (iv_start triggers async drug curve compute)
+      x-status: implemented
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEventRequest"
+      responses:
+        "201":
+          description: Created (compute happens after response)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      success: { type: boolean, example: true }
+                      data:
+                        $ref: "#/components/schemas/Event"
+
+  /api/insights:
+    get:
+      tags: [Insights]
+      summary: Get the most recently computed drug curve result (in-memory)
+      x-status: implemented
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: patientId
+          required: false
+          schema: { type: string }
+          description: Required when the authenticated user is a doctor; ignored for patients.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      success: { type: boolean, example: true }
+                      data:
+                        $ref: "#/components/schemas/DrugCurveResult"
+
+  /api/analyze-frame:
+    post:
+      tags: [AI Vision]
+      summary: Proxy image frame to AI service (multipart field name "frame")
+      x-status: implemented
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                frame:
+                  type: string
+                  format: binary
+              required: [frame]
+      responses:
+        "200":
+          description: Always 200; returns status=error on failures
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyzeFrameResponse"
+
+  /api/nodes:
+    get:
+      tags: [Nodes (planned)]
+      summary: List nodes (doctor: all, patient: assigned only)
+      x-status: implemented
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      success: { type: boolean, example: true }
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/DeviceNode"
+
+  /api/nodes/register:
+    post:
+      tags: [Nodes (planned)]
+      summary: Register a new node by nodeKey and host (doctor only)
+      x-status: implemented
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nodeKey: { type: string }
+                host: { type: string }
+              required: [nodeKey, host]
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      success: { type: boolean, example: true }
+                      data:
+                        $ref: "#/components/schemas/DeviceNode"
+
+  /api/nodes/{nodeId}/assign:
+    post:
+      tags: [Nodes (planned)]
+      summary: Assign a node to a patient (doctor only)
+      x-status: implemented
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: nodeId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                patientId: { type: string }
+              required: [patientId]
+      responses:
+        "200":
+          description: OK
+    delete:
+      tags: [Nodes (planned)]
+      summary: Revoke a node assignment (doctor only)
+      x-status: implemented
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: nodeId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+
+  # -------------------------
+  # Planned / referenced by frontend code but not currently implemented in backend/
+  # -------------------------
+
+  /api/auth/login:
+    post:
+      tags: [Auth (planned)]
+      summary: Login (frontend expects JWT in response)
+      x-status: implemented
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+              required: [email, password]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      success: { type: boolean, example: true }
+                      data:
+                        type: object
+                        properties:
+                          token: { type: string }
+                          user:
+                            type: object
+                            properties:
+                              id: { type: string }
+                              role: { type: string, enum: [doctor, patient] }
+                              email: { type: string }
+                            required: [id, role, email]
+
+  /api/auth/me:
+    get:
+      tags: [Auth (planned)]
+      summary: Get authenticated user
+      x-status: implemented
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      success: { type: boolean, example: true }
+                      data:
+                        type: object
+                        properties:
+                          _id: { type: string }
+                          email: { type: string }
+                          role: { type: string, enum: [doctor, patient] }
+                          assignedDoctorId: { type: string, nullable: true }
+
+  /api/patients:
+    get:
+      tags: [Patients (planned)]
+      summary: List patients
+      x-status: implemented
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: OK
+
+  /api/patients/register:
+    post:
+      tags: [Patients (planned)]
+      summary: Create a patient user (doctor only)
+      x-status: implemented
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+              required: [email, password]
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      id: { type: string }
+                      email: { type: string }
+                      role:
+                        type: string
+                        enum: [patient]
+
+  /api/patient/{id}/latest:
+    get:
+      tags: [Patients (planned)]
+      summary: Get latest vitals for a patient
+      x-status: implemented
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+
+  /api/patient/{id}/history:
+    get:
+      tags: [Patients (planned)]
+      summary: Get patient vitals history (newest first)
+      x-status: implemented
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
+      responses:
+        "200":
+          description: OK
+
+  /api/patient/{id}/drug-impact:
+    get:
+      tags: [Patients (planned)]
+      summary: Get drug impact (legacy frontend reference; prefer /api/insights)
+      x-status: implemented
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+
+  /api/alerts/{id}/ack:
+    post:
+      tags: [Alerts (planned)]
+      summary: Acknowledge an alert (v1.1 planned)
+      x-status: planned
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+
+  /api/alerts:
+    get:
+      tags: [Alerts]
+      summary: List alerts (frontend may pass status=active; backend currently ignores filters)
+      x-status: implemented
+      parameters:
+        - in: query
+          name: status
+          required: false
+          schema:
+            type: string
+            example: active
+      responses:
+        "200":
+          description: OK
+
+  /api/control/valve:
+    post:
+      tags: [Control (planned)]
+      summary: Control solenoid valve
+      x-status: planned
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                patientId: { type: string }
+                state: { type: string, example: OPEN }
+              required: [patientId, state]
+      responses:
+        "200":
+          description: OK
+
+  /api/control/flow:
+    post:
+      tags: [Control (planned)]
+      summary: Control IV flow rate
+      x-status: planned
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                patientId: { type: string }
+                rate: { type: number, example: 80 }
+              required: [patientId, rate]
+      responses:
+        "200":
+          description: OK
+
+  /api/logs:
+    get:
+      tags: [Logs (planned)]
+      summary: Query system logs
+      x-status: planned
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: patientId
+          required: false
+          schema: { type: string }
+        - in: query
+          name: type
+          required: false
+          schema: { type: string }
+        - in: query
+          name: from
+          required: false
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          required: false
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: OK
+
+  /api/settings/{patientId}:
+    put:
+      tags: [Settings (planned)]
+      summary: Update per-patient thresholds/settings
+      x-status: planned
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: patientId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: OK
+
+  # -------------------------
+  # Socket.io events (reference)
+  # -------------------------
+  /socket-events:
+    get:
+      tags: [Health]
+      summary: Reference-only Socket.IO contract (not a real endpoint)
+      x-status: documentation
+      responses:
+        "200":
+          description: Reference
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connection:
+                    type: object
+                    properties:
+                      url: { type: string, example: "http://localhost:4000" }
+                      transports:
+                        type: array
+                        items: { type: string, enum: [websocket, polling] }
+                  events:
+                    type: array
+                    items: { type: string }
+              example:
+                connection:
+                  url: http://localhost:4000
+                  transports: [websocket, polling]
+                events:
+                  - vitals:new
+                  - alert:new
+                  - insight:update
