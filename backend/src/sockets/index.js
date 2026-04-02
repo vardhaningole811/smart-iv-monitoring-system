@@ -7,25 +7,12 @@ function jwtSecret() {
 
 export function setupSockets(httpServer, app) {
 
-  // ✅ Allow BOTH localhost + deployed frontend
-  const allowedOrigins = [
-    "http://localhost:5173",
-    "https://effortless-genie-bd7cd2.netlify.app"
-  ];
-
   const io = new Server(httpServer, {
     cors: {
-      origin: (origin, callback) => {
-        // allow requests with no origin (mobile apps, curl, etc.)
-        if (!origin) return callback(null, true);
-
-        if (allowedOrigins.includes(origin)) {
-          return callback(null, true);
-        } else {
-          console.log("❌ Blocked by CORS:", origin);
-          return callback(new Error("Not allowed by CORS"));
-        }
-      },
+      origin: [
+        "http://localhost:5173",
+        "https://effortless-genie-bd7cd2.netlify.app"
+      ],
       methods: ["GET", "POST"],
       credentials: true,
     },
@@ -33,7 +20,7 @@ export function setupSockets(httpServer, app) {
 
   app.locals.io = io;
 
-  // 🔐 AUTH MIDDLEWARE
+  // 🔐 AUTH
   io.use((socket, next) => {
     const token =
       socket.handshake.auth?.token || socket.handshake.query?.token;
