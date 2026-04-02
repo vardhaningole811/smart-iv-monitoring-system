@@ -6,20 +6,38 @@ function jwtSecret() {
 }
 
 export function setupSockets(httpServer, app) {
-  const corsOrigins = (process.env.SOCKET_CORS_ORIGIN || "http://localhost:5173")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+
+  // ✅ Allow BOTH localhost + deployed frontend
+  const allowedOrigins = [
+    "http://localhost:5173",
+    "https://effortless-genie-bd7cd2.netlify.app"
+  ];
 
   const io = new Server(httpServer, {
-    cors: { origin: corsOrigins, credentials: true },
+    cors: {
+      origin: (origin, callback) => {
+        // allow requests with no origin (mobile apps, curl, etc.)
+        if (!origin) return callback(null, true);
+
+        if (allowedOrigins.includes(origin)) {
+          return callback(null, true);
+        } else {
+          console.log("❌ Blocked by CORS:", origin);
+          return callback(new Error("Not allowed by CORS"));
+        }
+      },
+      methods: ["GET", "POST"],
+      credentials: true,
+    },
   });
 
   app.locals.io = io;
 
+  // 🔐 AUTH MIDDLEWARE
   io.use((socket, next) => {
     const token =
       socket.handshake.auth?.token || socket.handshake.query?.token;
+
     if (!token) return next();
 
     try {
@@ -27,15 +45,20 @@ export function setupSockets(httpServer, app) {
       socket.data.userId = payload.sub;
       socket.data.role = payload.role;
     } catch (_err) {
-      // If token is invalid, keep socket unauthenticated.
+      console.log("Invalid token for socket");
     }
+
     return next();
   });
 
+  // 🔌 CONNECTION
   io.on("connection", (socket) => {
+    console.log("✅ Socket connected:", socket.id);
+
     if (socket.data.role === "patient" && socket.data.userId) {
       socket.join(`patient:${socket.data.userId}`);
     }
+
     if (socket.data.role === "doctor") {
       socket.join("role:doctor");
     }
@@ -44,30 +67,51 @@ export function setupSockets(httpServer, app) {
   return io;
 }
 
+// 🔴 EVENTS
 export function emitVitalsNew(io, vitals) {
   if (!io) return;
+
   const patientId = vitals?.patientId;
-  if (patientId) io.to(`patient:${patientId}`).emit("vitals:new", vitals);
+
+  if (patientId) {
+    io.to(`patient:${patientId}`).emit("vitals:new", vitals);
+  }
+
   io.to("role:doctor").emit("vitals:new", vitals);
 }
 
 export function emitAlertNew(io, alert) {
   if (!io) return;
+
   const patientId = alert?.patientId;
-  if (patientId) io.to(`patient:${patientId}`).emit("alert:new", alert);
+
+  if (patientId) {
+    io.to(`patient:${patientId}`).emit("alert:new", alert);
+  }
+
   io.to("role:doctor").emit("alert:new", alert);
 }
 
 export function emitInsightUpdate(io, payload) {
   if (!io) return;
+
   const patientId = payload?.patientId;
-  if (patientId) io.to(`patient:${patientId}`).emit("insight:update", payload);
+
+  if (patientId) {
+    io.to(`patient:${patientId}`).emit("insight:update", payload);
+  }
+
   io.to("role:doctor").emit("insight:update", payload);
 }
 
 export function emitVisionUpdate(io, payload) {
   if (!io) return;
+
   const patientId = payload?.patientId;
-  if (patientId) io.to(`patient:${patientId}`).emit("vision:update", payload);
+
+  if (patientId) {
+    io.to(`patient:${patientId}`).emit("vision:update", payload);
+  }
+
   io.to("role:doctor").emit("vision:update", payload);
 }
