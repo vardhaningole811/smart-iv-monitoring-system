@@ -23,19 +23,12 @@ const port = process.env.PORT || 4000;
 
 setupSockets(server, app);
 
-
-// FIXED CORS CONFIG (IMPORTANT)
-const corsOrigins = [
-  "http://localhost:5173",
-  "https://effortless-genie-bd7cd2.netlify.app"
-];
-
-app.use(
-  cors({
-    origin: corsOrigins,
-    credentials: true,
-  })
-);
+// FINAL CORS FIX (NO RESTRICTIONS - HACKATHON SAFE)
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+}));
 
 app.use(express.json());
 
